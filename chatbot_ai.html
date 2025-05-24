@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Generatore Preventivi Carrozzeria</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {"50":"#eff6ff","100":"#dbeafe","200":"#bfdbfe","300":"#93c5fd","400":"#60a5fa","500":"#3b82f6","600":"#2563eb","700":"#1d4ed8","800":"#1e40af","900":"#1e3a8a","950":"#172554"}
+            }
+          }
+        }
+      }
+    </script>
+    <script>
+      // Imposta la variabile ambiente API_KEY per l'applicazione client-side
+      window.process = window.process || {};
+      window.process.env = window.process.env || {};
+      window.process.env.API_KEY = "AIzaSyAUpMnG760HSOV7rah2UwkOajoH3aD4OFs";
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.0.0",
+    "jspdf": "https://esm.sh/jspdf@2.5.1"
+  }
+}
+</script>
+</head>
+  <body class="bg-gray-100">
+    <div id="root"></div>
+    <script type="module">
+      import React, { useState, useEffect, useRef } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { GoogleGenAI } from "@google/genai"; // No 'Chat', 'Part', etc. needed at top level for single file.
+      import jsPDF from 'jspdf';
+
+      // --- START OF INLINED CONSTANTS.TS ---
+      const AI_NAME = "AutoCare.AI";
+      const GEMINI_MODEL_NAME = "gemini-2.5-flash-preview-04-17";
+      const GOOGLE_MAPS_API_KEY = "AIzaSyAUpMnG760HSOV7rah2UwkOajoH3aD4OFs"; // User-provided key
+      const INITIAL_DISCLAIMER_MESSAGE = "ATTENZIONE: Questo chatbot analizza solo i danni esterni e genera preventivi APPROSSIMATIVI. Per una diagnosi accurata e un preventivo completo, è indispensabile consultare un carrozziere.";
+      const INITIAL_SYSTEM_PROMPT = `Agisci come un assistente per officine di carrozzeria. Il tuo nome è ${AI_NAME}.
+Il tuo obiettivo principale è raccogliere informazioni specifiche dal cliente PRIMA di generare un preventivo dettagliato, OPPURE aiutarlo a trovare carrozzerie vicine se richiesto.
+
+Dati Obbligatori da Raccogliere per Preventivi (chiedili uno o due alla volta se non forniti inizialmente):
+1.  **Nome e Cognome del Cliente**
+2.  **Targa del Veicolo**
+3.  **Marca e Modello del Veicolo**
+4.  **Chilometraggio Attuale del Veicolo** (in km)
+5.  **Descrizione dei lavori richiesti** OPPURE chiedi di **caricare immagini del danno** (se non già fatto) e specifica che le userai per dedurre i lavori.
+
+Flusso Conversazionale per la Raccolta Dati (Preventivi):
+*   Se l'utente inizia la conversazione (es. "ciao", "preventivo", o carica solo immagini), inizia chiedendo la prima informazione mancante (es. "Ciao! Per poterti aiutare con un preventivo, avrò bisogno di alcune informazioni. Potresti iniziare fornendomi il tuo Nome e Cognome?").
+*   Dopo ogni informazione fornita dall'utente, confermala brevemente (es. "Grazie, [Nome Cliente].") e poi chiedi la successiva informazione mancante (es. "Ora, potresti indicarmi la targa del veicolo?").
+*   Se l'utente fornisce immagini, conferma che le userai per l'analisi del danno ma continua a chiedere gli altri dati del veicolo e del cliente.
+*   NON procedere alla generazione del preventivo finché TUTTI e CINQUE i punti sopra elencati non sono stati raccolti.
+*   Durante la fase di raccolta dati, le tue risposte devono essere brevi e focalizzate SOLO sulla richiesta dell'informazione mancante o sulla conferma di un'informazione ricevuta. Non utilizzare il template del preventivo in questa fase.
+
+Generazione del Preventivo Finale:
+*   Quando hai confermato all'utente di aver raccolto TUTTE le informazioni necessarie (es. con un messaggio tipo "Perfetto, ho tutte le informazioni necessarie! Ecco il suo preventivo:"), ALLORA E SOLO ALLORA, nella stessa risposta, procedi a generare il preventivo.
+*   La tua risposta che CONTIENE IL PREVENTIVO (inclusa la frase di conferma appena sopra) DEVE iniziare con la stringa ESATTA: \`###QUOTE_START###\`. 
+*   ESEMPIO di come deve iniziare la tua risposta QUANDO invii il preventivo:
+    \`###QUOTE_START###Perfetto, ho tutte le informazioni necessarie! Ecco il suo preventivo dettagliato:\`
+    \`**PREVENTIVO RIPARAZIONE VEICOLO**\`
+    \`...resto del preventivo...\`
+
+Template del Preventivo (da usare SOLO come parte della risposta che inizia con \`###QUOTE_START###\`):
+**PREVENTIVO RIPARAZIONE VEICOLO**
+
+**Intestazione:**
+*   **Cliente:** [Nome Cognome Cliente]
+*   **Data Preventivo:** [Data odierna, es. GG/MM/AAAA]
+*   **Numero Preventivo:** [Genera un numero fittizio, es. PREV-AAAA-XXXX]
+*   **Targa Veicolo:** [Targa]
+*   **Marca/Modello Veicolo:** [Marca Modello]
+*   **Chilometraggio:** [km]
+
+**Interventi di Riparazione:**
+| N. | Descrizione Lavoro                                  | Q.tà | Prezzo Unit. (€) | Totale (€) |
+|----|-----------------------------------------------------|------|------------------|------------|
+| 1. | [Es. Sostituzione paraurti anteriore]               | 1    | [Prezzo]         | [Prezzo]   |
+| 2. | [Es. Verniciatura paraurti anteriore]               | 1    | [Prezzo]         | [Prezzo]   |
+| 3. | [Es. Riparazione ammaccatura parafango dx]            | 1    | [Prezzo]         | [Prezzo]   |
+| .. | ...                                                 | ...  | ...              | ...        |
+
+**Manodopera:**
+| Tipo Lavoro        | Ore Impiegate | Costo Orario (€/ora) | Totale (€) |
+|--------------------|---------------|----------------------|------------|
+| [Es. Lattoneria]   | [Ore]         | [Costo]              | [Prezzo]   |
+| [Es. Verniciatura] | [Ore]         | [Costo]              | [Prezzo]   |
+| ...                | ...           | ...                  | ...        |
+
+**Materiali e Ricambi:**
+| Descrizione                               | Q.tà | Prezzo Unit. (€) | Totale (€) |
+|-------------------------------------------|------|------------------|------------|
+| [Es. Paraurti anteriore XYZ (Originale)]  | 1    | [Prezzo]         | [Prezzo]   |
+| [Es. Vernice metallizzata Blu Cod.123]    | 0.5L | [Prezzo]         | [Prezzo]   |
+| [Es. Materiale di consumo (stucco, etc.)] | 1    | [Prezzo]         | [Prezzo]   |
+| ...                                       | ...  | ...              | ...        |
+
+**Riepilogo Finale:**
+*   **Subtotale Interventi:** [Somma totali interventi] €
+*   **Subtotale Manodopera:** [Somma totali manodopera] €
+*   **Subtotale Materiali/Ricambi:** [Somma totali materiali] €
+*   **Imponibile Totale:** [Somma dei subtotali] €
+*   **IVA (22%):** [Calcolo IVA sull'imponibile] €
+*   **TOTALE COMPLESSIVO:** [Imponibile Totale + IVA] €
+
+**Note:**
+*   Validità del preventivo: [Es. 30 giorni dalla data di emissione].
+*   Tempi di consegna stimati: [Es. 5-7 giorni lavorativi dall'accettazione del preventivo e disponibilità ricambi].
+*   Garanzia: [Es. Garanzia di 12 mesi sulle riparazioni effettuate e sui ricambi originali].
+*   Eventuali servizi aggiuntivi (es. auto di cortesia) non inclusi se non specificato.
+
+**Firme:**
+
+Per Accettazione Cliente:                                  Per La Carrozzeria ${AI_NAME}:
+_________________________                                  _________________________
+
+**Richiesta Mappa Carrozzerie Vicine:**
+*   Se l'utente chiede esplicitamente di trovare carrozzerie vicine (es. "trova carrozzerie vicino a me", "dove posso trovare una carrozzeria?", "elenco carrozzerie zona"), la tua risposta DEVE iniziare ESCLUSIVAMENTE con la stringa \`###MAP_REQUEST###\` seguita da un breve messaggio preparatorio.
+*   ESEMPIO di risposta per richiesta mappa: \`###MAP_REQUEST###Certo! Per mostrarti le carrozzerie nelle vicinanze, avrò bisogno del permesso di accedere alla tua posizione attuale. Per favore, abilita la geolocalizzazione quando richiesto dal browser.\`
+*   NON tentare di elencare indirizzi o nomi di carrozzerie tu stesso. L'applicazione gestirà la visualizzazione della mappa.
+
+Regole Generali e Comportamento Specifico:
+*   Utilizza un tono professionale, chiaro e cortese. I prezzi dei preventivi devono essere verosimili.
+*   Se le immagini per un preventivo non sono chiare o non mostrano un veicolo danneggiato, o se la descrizione del lavoro è palesemente insufficiente anche dopo aver chiesto chiarimenti, spiega che hai bisogno di dettagli più precisi o immagini migliori per poter procedere.
+*   Non discutere argomenti non correlati alla generazione di preventivi per carrozzeria o alla ricerca di carrozzerie.
+
+**Regole Cruciali per la Risposta del Preventivo (NON IGNORARE MAI):**
+1.  Quando fornisci il preventivo (la risposta che inizia con \`###QUOTE_START###\`), questa risposta DEVE contenere ESCLUSIVAMENTE la frase di conferma iniziale seguita IMMEDIATAMENTE dal template del preventivo compilato.
+2.  NON AGGIUNGERE ALCUN TESTO AGGIUNTIVO, commenti, scuse, o discussioni sulle tue capacità (ad esempio, riguardo alla generazione di PDF o qualsiasi altra funzionalità) in QUESTA SPECIFICA RISPOSTA.
+3.  È FONDAMENTALE che tu NON dica MAI al cliente che non puoi generare PDF o discutere il processo di generazione PDF in nessun messaggio. L'applicazione gestirà la creazione del PDF automaticamente e silenziosamente in background.
+
+**Regole Cruciali per la Risposta di Richiesta Mappa (NON IGNORARE MAI):**
+1.  Quando l'utente chiede di trovare carrozzerie vicine, la tua risposta DEVE iniziare con \`###MAP_REQUEST###\` e contenere solo un breve messaggio che informa l'utente che verrà chiesta la geolocalizzazione.
+2.  NON includere altre informazioni o testo in questa specifica risposta.
+`;
+      const MISSING_API_KEY_ERROR = "La variabile d'ambiente API_KEY non è impostata. Questa applicazione richiede una chiave API Gemini valida per funzionare.";
+      const GENERAL_API_ERROR = "Spiacenti, ho riscontrato un errore durante l'elaborazione della tua richiesta. Riprova più tardi.";
+      const PDF_GENERATION_CONFIRMATION = "Il tuo PDF è stato generato. Il download dovrebbe iniziare a breve.";
+      const PDF_GENERATION_ERROR = "Spiacenti, si è verificato un errore durante la generazione del PDF. Riprova.";
+      const PDF_NO_CONTEXT_ERROR = "Non ho trovato un preventivo recente per cui generare un PDF. Per favore, fornisci prima i dettagli per un preventivo.";
+      const PDF_FILE_NAME = "preventivo_carrozzeria.pdf";
+      const PDF_TITLE = "Preventivo Dettagliato Riparazione Veicolo";
+      const PDF_USER_IMAGE_CAPTION = "Immagini di Riferimento Fornite (se presenti):";
+      const PDF_QUOTE_CAPTION_PREFIX = "Preventivo Generato da";
+      const PDF_DISCLAIMER = "Nota: Questo preventivo è basato sulle informazioni fornite e/o sulle immagini caricate. I costi finali potrebbero variare a seguito di un'ispezione dettagliata del veicolo. Questo documento ha validità come indicato nella sezione Note.";
+      const PDF_DATE_LABEL = "Data del preventivo:";
+      const MAX_IMAGE_UPLOADS = 5;
+      const MAX_IMAGE_UPLOADS_ALERT = `Puoi caricare al massimo ${MAX_IMAGE_UPLOADS} immagini di riferimento alla volta.`;
+      const LOCAL_STORAGE_HISTORY_KEY = 'stimabotQuoteHistory';
+      const HISTORY_PANEL_TITLE = "Cronologia Preventivi";
+      const CLEAR_HISTORY_CONFIRMATION = "Sei sicuro di voler cancellare tutta la cronologia dei preventivi? Questa azione non può essere annullata.";
+      const NO_HISTORY_MESSAGE = "Non ci sono preventivi salvati nella cronologia.";
+      const FEEDBACK_PROMPT = "Questo preventivo ti è stato utile? Rispondi 'sì', 'no', o 'parzialmente'.";
+      const FEEDBACK_THANKS_MESSAGE = "Grazie per il tuo feedback!";
+      const FEEDBACK_YES_OPTIONS = ['sì', 'si', 'molto', 'utile', 'yes', 'certo', 'ok', 'va bene'];
+      const FEEDBACK_NO_OPTIONS = ['no', 'non', 'per niente', 'inutile'];
+      const FEEDBACK_PARTIAL_OPTIONS = ['parzialmente', 'in parte', 'abbastanza', 'così così'];
+      const MAP_SEARCH_RADIUS = 5000; // meters (5km)
+      const MAP_DEFAULT_ZOOM = 13;
+      const MAP_REQUEST_MARKER = "###MAP_REQUEST###";
+      const GEOLOCATION_ERROR_PERMISSION_DENIED = "Non hai concesso i permessi per la geolocalizzazione. Abilita i permessi nelle impostazioni del browser per usare questa funzione.";
+      const GEOLOCATION_ERROR_POSITION_UNAVAILABLE = "Informazioni sulla posizione non disponibili al momento. Riprova più tardi.";
+      const GEOLOCATION_ERROR_TIMEOUT = "Timeout durante la richiesta della posizione. Verifica la tua connessione e riprova.";
+      const GEOLOCATION_ERROR_UNKNOWN = "Si è verificato un errore sconosciuto durante il recupero della posizione.";
+      const GEOLOCATION_UNSUPPORTED_BROWSER = "La geolocalizzazione non è supportata da questo browser.";
+      const GOOGLE_MAPS_LOAD_ERROR = "Impossibile caricare la libreria Google Maps. Verifica la tua connessione o contatta l'assistenza.";
+      // --- END OF INLINED CONSTANTS.TS ---
+
+      // --- START OF INLINED ICON COMPONENTS ---
+      const PaperClipIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          fill: "none",
+          viewBox: "0 0 24 24",
+          strokeWidth: 1.5,
+          stroke: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          d: "M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.693 7.693a2.25 2.25 0 003.182 3.182l7.693-7.693a.75.75 0 011.06 1.06l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32"
+        }))
+      );
+
+      const SendIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          fill: "none",
+          viewBox: "0 0 24 24",
+          strokeWidth: 1.5,
+          stroke: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          d: "M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+        }))
+      );
+
+      const UserIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          fill: "none",
+          viewBox: "0 0 24 24",
+          strokeWidth: 1.5,
+          stroke: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          d: "M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"
+        }))
+      );
+
+      const SparklesIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          viewBox: "0 0 24 24",
+          fill: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          d: "M12 2C9.243 2 7 4.243 7 7v3H6c-1.103 0-2 .897-2 2v2c0 1.103.897 2 2 2h1v3c0 2.757 2.243 5 5 5s5-2.243 5-5v-3h1c1.103 0 2-.897 2-2v-2c0-1.103-.897-2-2-2h-1V7c0-2.757-2.243-5-5-5zm0 2c1.654 0 3 1.346 3 3v3H9V7c0-1.654 1.346-3 3-3zm-4 9c-.551 0-1 .449-1 1s.449 1 1 1h8c.551 0 1-.449 1-1s-.449-1-1-1H8zm1 3v2c0 1.654-1.346 3-3 3H6v-2c0-1.654 1.346-3 3-3h2zm6 0c1.654 0 3 1.346 3 3v2h-2c-1.654 0-3-1.346-3-3v-2z"
+        }), React.createElement('circle', { cx: "9.5", cy: "8.5", r: "1.5" }), React.createElement('circle', { cx: "14.5", cy: "8.5", r: "1.5" }))
+      );
+      
+      const ClockIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          fill: "none",
+          viewBox: "0 0 24 24",
+          strokeWidth: 1.5,
+          stroke: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          d: "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+        }))
+      );
+
+      const XMarkIcon = (props) => (
+        React.createElement('svg', {
+          xmlns: "http://www.w3.org/2000/svg",
+          fill: "none",
+          viewBox: "0 0 24 24",
+          strokeWidth: 1.5,
+          stroke: "currentColor",
+          ...props
+        }, React.createElement('path', {
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          d: "M6 18L18 6M6 6l12 12"
+        }))
+      );
+      // --- END OF INLINED ICON COMPONENTS ---
+
+      // --- START OF INLINED LoadingSpinner.tsx ---
+      const LoadingSpinner = ({ size = 'h-5 w-5' }) => {
+        return (
+          React.createElement('svg', {
+            className: `animate-spin text-primary-500 ${size}`,
+            xmlns: "http://www.w3.org/2000/svg",
+            fill: "none",
+            viewBox: "0 0 24 24"
+          }, 
+            React.createElement('circle', {
+              className: "opacity-25",
+              cx: "12",
+              cy: "12",
+              r: "10",
+              stroke: "currentColor",
+              strokeWidth: "4"
+            }), 
+            React.createElement('path', {
+              className: "opacity-75",
+              fill: "currentColor",
+              d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            })
+          )
+        );
+      };
+      // --- END OF INLINED LoadingSpinner.tsx ---
+
+      // --- START OF INLINED PDFSERVICE.TS ---
+      const PDF_MARGIN = 15; // mm
+      const PDF_PAGE_WIDTH_MM = 210; // A4 width
+      const PDF_PAGE_HEIGHT_MM = 297; // A4 height
+      const PDF_MAX_CONTENT_WIDTH_MM = PDF_PAGE_WIDTH_MM - 2 * PDF_MARGIN;
+      const PDF_FONT_SIZE_NORMAL = 11;
+      const PDF_FONT_SIZE_SMALL = 9;
+      const PDF_FONT_SIZE_TITLE = 16;
+      const PDF_LINE_SPACING_DEFAULT = 6; // mm
+      const PDF_LINE_SPACING_QUOTE = 5; // mm for quote text lines
+      const PDF_IMAGE_MAX_WIDTH_MM = PDF_MAX_CONTENT_WIDTH_MM * 0.7;
+      const PDF_IMAGE_MAX_HEIGHT_MM = PDF_PAGE_HEIGHT_MM * 0.30;
+      const PDF_IMAGE_SPACING = 5; // mm between images
+
+      const pdfCheckAndAddPage = (doc, currentY, requiredSpace) => {
+        if (currentY + requiredSpace > PDF_PAGE_HEIGHT_MM - PDF_MARGIN) {
+          doc.addPage();
+          return PDF_MARGIN; 
+        }
+        return currentY;
+      };
+
+      const pdfAddWrappedTextWithPageBreaks = (
+        doc,
+        text,
+        x,
+        initialY,
+        maxWidth,
+        lineHeight,
+        options
+      ) => {
+        let currentY = initialY;
+        const lines = doc.splitTextToSize(text, maxWidth);
+
+        lines.forEach((lineText) => {
+          currentY = pdfCheckAndAddPage(doc, currentY, lineHeight);
+          doc.text(lineText, x, currentY, options || {});
+          currentY += lineHeight;
+        });
+        return currentY;
+      };
+
+      const generateQuotePdf = async (
+          aiGeneratedQuoteText,
+          userImageUrls,
+          quoteTimestamp
+      ) => {
+        try {
+          const doc = new jsPDF({
+            orientation: 'p',
+            unit: 'mm',
+            format: 'a4',
+          });
+
+          let currentY = PDF_MARGIN;
+
+          doc.setFontSize(PDF_FONT_SIZE_TITLE);
+          doc.setFont('helvetica', 'bold');
+          doc.text(PDF_TITLE, PDF_PAGE_WIDTH_MM / 2, currentY, { align: 'center' });
+          currentY += PDF_LINE_SPACING_DEFAULT * 2;
+
+          doc.setFontSize(PDF_FONT_SIZE_NORMAL);
+          doc.setFont('helvetica', 'normal');
+          const dateForPdf = quoteTimestamp || new Date();
+          const formattedDate = new Intl.DateTimeFormat('it-IT', {
+            year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+          }).format(dateForPdf);
+          doc.text(`${PDF_DATE_LABEL} ${formattedDate}`, PDF_MARGIN, currentY);
+          currentY += PDF_LINE_SPACING_DEFAULT * 1.5;
+
+          if (userImageUrls && userImageUrls.length > 0) {
+            currentY = pdfCheckAndAddPage(doc, currentY, PDF_LINE_SPACING_DEFAULT * 2);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(PDF_FONT_SIZE_NORMAL);
+            currentY = pdfAddWrappedTextWithPageBreaks(doc, PDF_USER_IMAGE_CAPTION, PDF_MARGIN, currentY, PDF_MAX_CONTENT_WIDTH_MM, PDF_LINE_SPACING_DEFAULT);
+            currentY += PDF_IMAGE_SPACING / 2;
+
+            for (const imageUrl of userImageUrls) {
+              try {
+                const img = new Image();
+                img.src = imageUrl;
+                
+                await new Promise((resolve, reject) => {
+                    img.onload = () => resolve();
+                    img.onerror = (e) => {
+                        console.error("Failed to load image for PDF:", imageUrl, e);
+                        reject(new Error(`Failed to load image: ${imageUrl}. Check console for details.`));
+                    };
+                });
+
+                if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+                     throw new Error("Image could not be loaded properly (e.g., empty or incomplete).");
+                }
+
+                let imageType = 'JPEG'; 
+                const lowerCaseImageUrl = imageUrl.toLowerCase();
+                if (lowerCaseImageUrl.startsWith('data:image/png')) {
+                    imageType = 'PNG';
+                } else if (lowerCaseImageUrl.startsWith('data:image/jpeg') || lowerCaseImageUrl.startsWith('data:image/jpg')) {
+                    imageType = 'JPEG';
+                }
+                
+                let imgWidth = img.naturalWidth;
+                let imgHeight = img.naturalHeight;
+                const aspectRatio = imgWidth / imgHeight;
+
+                if (imgWidth > PDF_IMAGE_MAX_WIDTH_MM) {
+                  imgWidth = PDF_IMAGE_MAX_WIDTH_MM;
+                  imgHeight = imgWidth / aspectRatio;
+                }
+                if (imgHeight > PDF_IMAGE_MAX_HEIGHT_MM) {
+                  imgHeight = PDF_IMAGE_MAX_HEIGHT_MM;
+                  imgWidth = imgHeight * aspectRatio;
+                }
+
+                currentY = pdfCheckAndAddPage(doc, currentY, imgHeight + PDF_IMAGE_SPACING);
+                const imageX = (PDF_PAGE_WIDTH_MM - imgWidth) / 2; 
+                doc.addImage(imageUrl, imageType, imageX, currentY, imgWidth, imgHeight);
+                currentY += imgHeight + PDF_IMAGE_SPACING;
+
+              } catch (e) {
+                console.error("Error adding an image to PDF, skipping image:", e, imageUrl);
+                currentY = pdfCheckAndAddPage(doc, currentY, PDF_LINE_SPACING_DEFAULT);
+                doc.setFont('helvetica', 'italic');
+                doc.setFontSize(PDF_FONT_SIZE_SMALL);
+                doc.setTextColor(255, 0, 0); 
+                const errorMsg = `Impossibile caricare un'immagine: ${ (e instanceof Error) ? e.message : 'Dettagli non disponibili.'}`;
+                currentY = pdfAddWrappedTextWithPageBreaks(doc, errorMsg, PDF_MARGIN, currentY, PDF_MAX_CONTENT_WIDTH_MM, PDF_LINE_SPACING_DEFAULT * 0.8);
+                doc.setTextColor(0, 0, 0); 
+              }
+            }
+            currentY += PDF_LINE_SPACING_DEFAULT; 
+          }
+
+          currentY = pdfCheckAndAddPage(doc, currentY, PDF_LINE_SPACING_DEFAULT); 
+          doc.setFont('courier', 'normal'); 
+          doc.setFontSize(PDF_FONT_SIZE_NORMAL - 1); 
+
+          const quoteParagraphs = aiGeneratedQuoteText.split('\\n');
+          for (const paragraph of quoteParagraphs) {
+            if (paragraph.trim() === "") {
+                currentY = pdfCheckAndAddPage(doc, currentY, PDF_LINE_SPACING_QUOTE);
+                currentY += PDF_LINE_SPACING_QUOTE;
+                continue;
+            }
+            currentY = pdfAddWrappedTextWithPageBreaks(doc, paragraph, PDF_MARGIN, currentY, PDF_MAX_CONTENT_WIDTH_MM, PDF_LINE_SPACING_QUOTE);
+          }
+          currentY += PDF_LINE_SPACING_DEFAULT;
+
+          const disclaimerEstimatedHeight = PDF_LINE_SPACING_DEFAULT * 0.8 * 4;
+          currentY = pdfCheckAndAddPage(doc, currentY, disclaimerEstimatedHeight);
+          doc.setFontSize(PDF_FONT_SIZE_SMALL);
+          doc.setFont('helvetica', 'italic');
+          currentY = pdfAddWrappedTextWithPageBreaks(doc, PDF_DISCLAIMER, PDF_MARGIN, currentY, PDF_MAX_CONTENT_WIDTH_MM, PDF_LINE_SPACING_DEFAULT * 0.8);
+
+          console.log("Attempting to generate and download PDF:", PDF_FILE_NAME);
+          const pdfBlob = doc.output('blob');
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(pdfBlob);
+          link.download = PDF_FILE_NAME;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(link.href);
+          console.log("PDF download initiated for:", PDF_FILE_NAME);
+
+        } catch (pdfConstructionError) {
+          console.error("Fatal error during PDF generation process:", pdfConstructionError);
+          throw new Error(`PDF construction failed: ${pdfConstructionError instanceof Error ? pdfConstructionError.message : String(pdfConstructionError)}`);
+        }
+      };
+      // --- END OF INLINED PDFSERVICE.TS ---
+
+      // --- START OF INLINED GEMINSERVICE.TS ---
+      let geminiAiInstance = null; // To avoid conflict with 'ai' variable in App.tsx if any
+      let geminiChatInstance = null;
+
+      const getApiKey = () => {
+        // ASSUMPTION: process.env.API_KEY is available in the browser's global scope or a polyfilled process object.
+        // In a pure client-side single HTML, this needs to be injected or replaced.
+        if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+            return process.env.API_KEY;
+        }
+        // Fallback or error if not found - this part is tricky for pure client-side.
+        // For this exercise, we assume it's somehow available as per prompt strictness.
+        // If not, the initializeChat will catch it.
+        return undefined; 
+      }
+
+      const initializeChat = () => {
+        const apiKey = getApiKey();
+        if (!apiKey) {
+          console.error(MISSING_API_KEY_ERROR);
+          return MISSING_API_KEY_ERROR;
+        }
+
+        if (!geminiAiInstance) {
+          try {
+            geminiAiInstance = new GoogleGenAI({ apiKey });
+            geminiChatInstance = geminiAiInstance.chats.create({
+              model: GEMINI_MODEL_NAME,
+              config: {
+                systemInstruction: INITIAL_SYSTEM_PROMPT,
+              },
+            });
+          } catch (error) {
+            console.error("Failed to initialize Gemini AI or Chat:", error);
+            const errorMessage = error instanceof Error ? error.message : GENERAL_API_ERROR;
+            return `Inizializzazione AI fallita: ${errorMessage}`;
+          }
+        }
+        return null; // No error
+      };
+
+      const sendMessageToChat = async (
+        userText,
+        imageFiles
+      ) => {
+        if (!geminiChatInstance || !geminiAiInstance) {
+          const initError = initializeChat();
+          if (initError || !geminiChatInstance || !geminiAiInstance) {
+              return { text: initError || "Chat non inizializzata." };
+          }
+        }
+
+        const parts = [];
+        let actualUserText = userText?.trim() ?? "";
+
+        if (actualUserText) {
+          parts.push({ text: actualUserText });
+        }
+
+        if (imageFiles && imageFiles.length > 0) {
+          imageFiles.forEach(file => {
+            parts.push({
+              inlineData: {
+                mimeType: file.type,
+                data: file.base64,
+              },
+            });
+          });
+        }
+        
+        if (parts.length === 0) {
+          parts.push({ text: "" }); 
+        }
+        
+        try {
+          let messageContentForApi;
+
+          if (parts.length === 1 && parts[0].text && (!imageFiles || imageFiles.length === 0)) {
+             messageContentForApi = parts[0].text;
+          } else {
+             messageContentForApi = parts;
+          }
+          
+          // Ensure geminiChatInstance is not null before calling sendMessage
+          if (!geminiChatInstance) {
+            return { text: "Chat non correttamente inizializzata."};
+          }
+
+          const result = await geminiChatInstance.sendMessage({ message: messageContentForApi });
+          let aiTextResponse = result.text;
+          
+          return { text: aiTextResponse };
+
+        } catch (error) {
+          console.error("Error sending message to Gemini:", error);
+          if (error instanceof Error) {
+              if (error.message.includes("API key not valid")) {
+                  return { text: "La chiave API fornita non è valida. Verifica la tua configurazione." };
+              }
+              if (error.message.toLowerCase().includes("content") || 
+                  error.message.toLowerCase().includes("part") || 
+                  error.message.toLowerCase().includes("request payload")) {
+                   return { text: `Si è verificato un problema con il formato del contenuto inviato all'IA. Dettagli: ${error.message}` };
+              }
+          }
+          return { text: GENERAL_API_ERROR };
+        }
+      };
+      // --- END OF INLINED GEMINSERVICE.TS ---
+
+      // --- START OF INLINED ChatMessage.tsx ---
+      const ChatMessage = ({ message }) => {
+        const isUser = message.sender === 'user';
+
+        const textClasses = () => {
+          let classes = "text-sm whitespace-pre-wrap";
+          if (message.isDisclaimer) {
+            classes += " text-red-600 font-bold";
+          }
+          return classes;
+        };
+
+        return (
+          React.createElement('div', { className: `flex mb-4 items-end ${isUser ? 'justify-end' : 'justify-start'}` },
+            !isUser && (
+              React.createElement('div', { className: "flex-shrink-0 h-8 w-8 rounded-full bg-primary-500 text-white flex items-center justify-center mr-3" },
+                React.createElement(SparklesIcon, { className: "h-5 w-5" })
+              )
+            ),
+            React.createElement('div', {
+              className: `p-3 rounded-lg max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg xl:max-w-2xl break-words ${
+                isUser ? 'bg-primary-500 text-white rounded-br-none' : 'bg-white text-gray-700 rounded-bl-none shadow'
+              }`}
+            ,
+              !isUser && !message.isDisclaimer && React.createElement('p', { className: "text-xs font-semibold text-primary-700 mb-1" }, AI_NAME),
+              message.isLoading ? (
+                React.createElement('div', { className: "flex items-center space-x-2" },
+                  React.createElement(LoadingSpinner, { size: "h-4 w-4" }),
+                  React.createElement('span', null, "Sto pensando...")
+                )
+              ) : (
+                React.createElement(React.Fragment, null,
+                  message.text && React.createElement('p', { className: textClasses() }, message.text),
+                  message.imageUrls && message.imageUrls.length > 0 && (
+                    React.createElement('div', { className: `mt-2 grid gap-2 ${message.imageUrls.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}` },
+                      message.imageUrls.map((url, index) => (
+                        React.createElement('img', {
+                          key: index,
+                          src: url,
+                          alt: `Immagine di riferimento ${index + 1}`,
+                          className: "rounded-lg max-w-full h-auto max-h-48 object-contain border border-gray-200"
+                        })
+                      ))
+                    )
+                  )
+                )
+              ),
+              React.createElement('p', { className: `text-xs mt-1 ${isUser ? 'text-blue-200' : 'text-gray-400'} ${message.isDisclaimer ? 'text-red-400' : ''} text-right` },
+                new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              )
+            ),
+            isUser && (
+              React.createElement('div', { className: "flex-shrink-0 h-8 w-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center ml-3" },
+                React.createElement(UserIcon, { className: "h-5 w-5" })
+              )
+            )
+          )
+        );
+      };
+      // --- END OF INLINED ChatMessage.tsx ---
+
+      // --- START OF INLINED ChatInput.tsx ---
+      const ChatInput = ({ onSendMessage, isLoading }) => {
+        const [text, setText] = useState('');
+        const [selectedFiles, setSelectedFiles] = useState([]);
+        const fileInputRef = useRef(null);
+
+        const handleImageChange = (event) => {
+          const files = event.target.files;
+          if (files) {
+            const currentFileCount = selectedFiles.length;
+            
+            if (files.length + currentFileCount > MAX_IMAGE_UPLOADS) {
+              alert(MAX_IMAGE_UPLOADS_ALERT);
+            }
+
+            const filesToProcessArray = Array.from(files).slice(0, MAX_IMAGE_UPLOADS - currentFileCount);
+
+            const imageProcessingPromises = filesToProcessArray
+              .filter(file => {
+                if (!file.type.startsWith('image/')) {
+                  return false;
+                }
+                return true;
+              })
+              .map(file => {
+                return new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    try {
+                      const dataUrl = reader.result;
+                      if (!dataUrl) {
+                        reject(new Error(`Lettura fallita per il file ${file.name}: dataUrl nullo.`));
+                        return;
+                      }
+                      const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+                      resolve({
+                        id: `${Date.now()}-${file.name}-${Math.random().toString(36).substring(2, 9)}`,
+                        name: file.name,
+                        type: file.type,
+                        base64,
+                        dataUrl,
+                      });
+                    } catch (e) {
+                      reject(e);
+                    }
+                  };
+                  reader.onerror = (error) => {
+                      console.error(`Errore durante la lettura del file ${file.name}:`, error);
+                      reject(error);
+                  };
+                  reader.onabort = () => {
+                      console.warn(`Lettura del file ${file.name} abortita.`);
+                      reject(new Error(`Lettura del file ${file.name} abortita.`));
+                  };
+                  reader.readAsDataURL(file);
+                });
+              });
+
+            Promise.allSettled(imageProcessingPromises)
+              .then(results => {
+                const newlyProcessedFiles = [];
+                results.forEach(result => {
+                  if (result.status === 'fulfilled') {
+                    newlyProcessedFiles.push(result.value);
+                  }
+                });
+
+                if (newlyProcessedFiles.length > 0) {
+                  setSelectedFiles(prevFiles => {
+                    const combined = [...prevFiles, ...newlyProcessedFiles];
+                    const uniqueCombined = combined.filter((file, index, self) =>
+                      index === self.findIndex((f) => f.id === file.id)
+                    );
+                    return uniqueCombined.slice(0, MAX_IMAGE_UPLOADS);
+                  });
+                }
+              })
+              .catch(error => {
+                console.error("Errore imprevisto durante l'elaborazione delle immagini:", error);
+                alert("Si è verificato un errore imprevisto durante la lettura dei file immagine.");
+              });
+          }
+          if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+          }
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          if (isLoading || (!text.trim() && selectedFiles.length === 0)) return;
+          onSendMessage(text.trim(), selectedFiles);
+          setText('');
+          setSelectedFiles([]);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+          }
+        };
+
+        const removeImage = (fileId) => {
+          setSelectedFiles(prevFiles => prevFiles.filter(file => file.id !== fileId));
+        };
+
+        const isInputDisabled = isLoading || selectedFiles.length >= MAX_IMAGE_UPLOADS;
+
+        return (
+          React.createElement('form', { onSubmit: handleSubmit, className: "p-4 bg-white border-t border-gray-200 sticky bottom-0" },
+            selectedFiles.length > 0 && (
+              React.createElement('div', { className: "mb-2 p-2 border border-gray-300 rounded-lg grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2" },
+                selectedFiles.map((file) => (
+                  React.createElement('div', { key: file.id, className: "relative group" },
+                    React.createElement('img', { src: file.dataUrl, alt: file.name, className: "max-h-20 h-20 w-full object-cover rounded" }),
+                    React.createElement('button', {
+                      type: "button",
+                      onClick: () => removeImage(file.id),
+                      className: "absolute top-0.5 right-0.5 bg-red-600 text-white rounded-full h-5 w-5 flex items-center justify-center text-xs opacity-75 group-hover:opacity-100 transition-opacity",
+                      'aria-label': `Rimuovi ${file.name}`
+                    }, "\u00D7")
+                  )
+                ))
+              )
+            ),
+            React.createElement('div', { className: "flex items-center space-x-2" },
+              React.createElement('input', {
+                type: "file",
+                accept: "image/*",
+                multiple: true,
+                onChange: handleImageChange,
+                ref: fileInputRef,
+                className: "hidden",
+                id: "imageUpload",
+                disabled: isInputDisabled
+              }),
+              React.createElement('label', {
+                htmlFor: "imageUpload",
+                className: `p-2 rounded-full text-gray-500 hover:bg-gray-100 cursor-pointer ${isInputDisabled ? 'opacity-50 cursor-not-allowed' : ''}`,
+                'aria-label': "Allega immagini",
+                title: "Allega immagini"
+              }, React.createElement(PaperClipIcon, { className: "h-6 w-6" })),
+              React.createElement('input', {
+                type: "text",
+                value: text,
+                onChange: (e) => setText(e.target.value),
+                placeholder: selectedFiles.length > 0 ? "Aggiungi una didascalia o una domanda..." : "Scrivi il tuo messaggio o carica immagini...",
+                className: "flex-grow p-3 border border-gray-300 rounded-full focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-shadow",
+                disabled: isLoading
+              }),
+              React.createElement('button', {
+                type: "submit",
+                disabled: isLoading || (!text.trim() && selectedFiles.length === 0),
+                className: "p-3 bg-primary-500 text-white rounded-full hover:bg-primary-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2",
+                'aria-label': "Invia messaggio"
+              }, isLoading ? React.createElement(LoadingSpinner, { size: "h-6 w-6" }) : React.createElement(SendIcon, { className: "h-6 w-6" }))
+            )
+          )
+        );
+      };
+      // --- END OF INLINED ChatInput.tsx ---
+
+      // --- START OF INLINED EstimateHistoryPanel.tsx ---
+      const QuoteHistoryPanel = ({ history, onClose, onClearHistory, onDeleteItem }) => {
+        const handleClearHistoryConfirmation = () => {
+          if (window.confirm(CLEAR_HISTORY_CONFIRMATION)) {
+            onClearHistory();
+          }
+        };
+
+        return (
+          React.createElement('div', {
+            className: "fixed inset-0 bg-black bg-opacity-50 z-40 flex justify-end",
+            onClick: onClose
+          },
+            React.createElement('div', {
+              className: "w-full max-w-md h-full bg-white shadow-xl flex flex-col z-50",
+              onClick: (e) => e.stopPropagation()
+            },
+              React.createElement('header', { className: "p-4 bg-primary-600 text-white flex justify-between items-center" },
+                React.createElement('h2', { className: "text-lg font-semibold" }, HISTORY_PANEL_TITLE),
+                React.createElement('button', {
+                  onClick: onClose,
+                  className: "text-white hover:bg-primary-700 p-1 rounded-full",
+                  'aria-label': "Chiudi cronologia"
+                }, React.createElement('svg', { xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24", strokeWidth: 1.5, stroke: "currentColor", className: "w-6 h-6" },
+                  React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", d: "M6 18L18 6M6 6l12 12" })
+                ))
+              ),
+              history.length === 0 ? (
+                React.createElement('div', { className: "p-6 text-center text-gray-500" },
+                  React.createElement('p', null, NO_HISTORY_MESSAGE)
+                )
+              ) : (
+                React.createElement('div', { className: "flex-grow overflow-y-auto p-4 space-y-3" },
+                  history.slice().reverse().map((item) => (
+                    React.createElement('div', { key: item.id, className: "bg-gray-50 p-3 rounded-lg shadow hover:shadow-md transition-shadow" },
+                      React.createElement('div', { className: "flex justify-between items-start" },
+                        React.createElement('div', null,
+                          React.createElement('p', { className: "text-xs text-gray-500" },
+                            new Date(item.timestamp).toLocaleString('it-IT', {
+                              day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                            })
+                          ),
+                          item.userQueryText && (
+                            React.createElement('p', { className: "text-sm text-gray-600 mt-1" }, React.createElement('strong', null, "Tu:"), ` ${item.userQueryText.substring(0, 50)}${item.userQueryText.length > 50 ? '...' : ''}`)
+                          )
+                        ),
+                        React.createElement('button', {
+                          onClick: () => onDeleteItem(item.id),
+                          className: "text-red-500 hover:text-red-700 text-xs",
+                          'aria-label': "Elimina questo preventivo",
+                          title: "Elimina questo preventivo"
+                        }, "Elimina")
+                      ),
+                      item.userImageUrls && item.userImageUrls.length > 0 && (
+                        React.createElement('img', { src: item.userImageUrls[0], alt: "Immagine di riferimento", className: "mt-2 rounded max-h-24 object-contain border" })
+                      ),
+                      React.createElement('p', { className: "text-sm mt-1 whitespace-pre-wrap" },
+                        React.createElement('strong', null, `${AI_NAME}:`), ` ${item.aiQuoteText.substring(0, 150)}${item.aiQuoteText.length > 150 ? '...' : ''}`
+                      ),
+                      React.createElement('div', { className: "text-xs text-gray-500 mt-1 space-x-2" },
+                        React.createElement('span', null, `PDF: ${item.pdfGenerated ? 'Sì' : 'No'}`),
+                        item.feedback && React.createElement('span', null, `Feedback: ${item.feedback}`)
+                      )
+                    )
+                  ))
+                )
+              ),
+              history.length > 0 && (
+                React.createElement('footer', { className: "p-4 border-t border-gray-200" },
+                  React.createElement('button', {
+                    onClick: handleClearHistoryConfirmation,
+                    className: "w-full py-2 px-4 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+                  }, "Cancella Tutta la Cronologia")
+                )
+              )
+            )
+          )
+        );
+      };
+      // --- END OF INLINED EstimateHistoryPanel.tsx ---
+
+      // --- START OF INLINED MapDisplay.tsx ---
+      const MapDisplay = ({ apiKey, userLocation, searchQuery, onClose, googleMapsReady }) => {
+        const mapRef = useRef(null);
+        const [map, setMap] = useState(null);
+        const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
+        const [placesError, setPlacesError] = useState(null);
+        const [markers, setMarkers] = useState([]);
+        const [infoWindow, setInfoWindow] = useState(null);
+        const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+
+        useEffect(() => {
+          if (!googleMapsReady || !mapRef.current) {
+            return;
+          }
+          const gMaps = window.google?.maps;
+          if (!gMaps) {
+            console.error("MapDisplay: window.google.maps not available even though googleMapsReady is true.");
+            setPlacesError("Errore nell'inizializzazione della mappa. Google Maps non disponibile.");
+            return;
+          }
+
+          const newMap = new gMaps.Map(mapRef.current, {
+            center: userLocation,
+            zoom: MAP_DEFAULT_ZOOM,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: false,
+            zoomControl: true,
+            scaleControl: true,
+          });
+          setMap(newMap);
+
+          new gMaps.Marker({
+              position: userLocation,
+              map: newMap,
+              title: "La tua Posizione",
+              icon: {
+                  path: gMaps.SymbolPath.CIRCLE,
+                  scale: 8,
+                  fillColor: "#4285F4",
+                  fillOpacity: 1,
+                  strokeWeight: 2,
+                  strokeColor: "white",
+              }
+          });
+
+          const newInfoWindowInstance = new gMaps.InfoWindow();
+          setInfoWindow(newInfoWindowInstance);
+          
+          return () => {
+            if (newInfoWindowInstance) {
+              newInfoWindowInstance.close();
+            }
+          };
+        }, [googleMapsReady, userLocation]);
+
+        useEffect(() => {
+          if (!map || !infoWindow || !googleMapsReady) {
+            return;
+          }
+
+          const gMaps = window.google?.maps;
+          if (!gMaps || !gMaps.places) {
+            console.error("MapDisplay: google.maps.places not available for search.");
+            setPlacesError("Errore interno: funzionalità di ricerca mappa non disponibile.");
+            return;
+          }
+          const gPlacesService = gMaps.places.PlacesService;
+          const gPlacesStatus = gMaps.places.PlacesServiceStatus;
+
+
+          setIsLoadingPlaces(true);
+          setPlacesError(null);
+          markers.forEach(marker => marker.setMap(null));
+          setMarkers([]); 
+
+          const placesService = new gPlacesService(map);
+          const request = {
+            location: userLocation,
+            radius: MAP_SEARCH_RADIUS,
+            keyword: searchQuery,
+          };
+
+          placesService.nearbySearch(request, (results, status) => {
+            setIsLoadingPlaces(false);
+            if (status === gPlacesStatus.OK && results) {
+              const newMarkersFound = [];
+              const bounds = new gMaps.LatLngBounds();
+              bounds.extend(new gMaps.LatLng(userLocation.lat, userLocation.lng));
+
+              results.forEach((place) => {
+                if (place.geometry && place.geometry.location && place.place_id) {
+                  const marker = new gMaps.Marker({
+                    map,
+                    position: place.geometry.location,
+                    title: place.name,
+                  });
+                  
+                  marker.addListener('click', () => {
+                    if (!infoWindow) return; 
+
+                    if (!place.place_id) { 
+                      infoWindow.setContent(`<div><strong>${place.name || 'Nome non disponibile'}</strong><br>Dettagli non disponibili (ID luogo mancante).</div>`);
+                      infoWindow.open({anchor: marker, map});
+                      return;
+                    }
+
+                    setIsLoadingDetails(true);
+                    infoWindow.setContent(
+                      `<div style="min-width: 150px; padding: 5px;">
+                         <div style="font-weight: bold; margin-bottom: 5px;">${place.name || 'Caricamento...'}</div>
+                         <div style="display: flex; align-items: center; justify-content: center; height: 50px;">
+                           <div class="loading-spinner-map-info" style="width: 20px; height: 20px; border: 2px solid #f3f3f3; border-top: 2px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                         </div>
+                       </div>
+                       <style>.loading-spinner-map-info { animation: spin 1s linear infinite; } @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>`
+                    );
+                    infoWindow.open({anchor: marker, map});
+
+                    const detailRequest = {
+                      placeId: place.place_id,
+                      fields: [
+                        'name', 'formatted_address', 'international_phone_number', 
+                        'opening_hours', 'website', 'rating', 'user_ratings_total', 
+                        'url', 'geometry', 'vicinity', 'place_id'
+                      ]
+                    };
+                    placesService.getDetails(detailRequest, (placeDetails, detailStatus) => {
+                      setIsLoadingDetails(false);
+                      if (detailStatus === gPlacesStatus.OK && placeDetails) {
+                        let content = `<div style="font-family: Arial, sans-serif; font-size: 14px; max-width: 300px; padding: 5px;">`;
+                        content += `<h3 style="margin-top:0; margin-bottom: 8px; font-size: 16px; color: #333;">${placeDetails.name || ''}</h3>`;
+                        
+                        if (placeDetails.formatted_address) {
+                          content += `<p style="margin: 4px 0; color: #555;"><strong>Indirizzo:</strong> ${placeDetails.formatted_address}</p>`;
+                        }
+                        if (placeDetails.international_phone_number) {
+                          content += `<p style="margin: 4px 0; color: #555;"><strong>Tel:</strong> <a href="tel:${placeDetails.international_phone_number}" style="color: #1a73e8; text-decoration: none;">${placeDetails.international_phone_number}</a></p>`;
+                        }
+
+                        if (placeDetails.rating) {
+                          const stars = '⭐'.repeat(Math.round(placeDetails.rating)) + '☆'.repeat(5 - Math.round(placeDetails.rating));
+                          content += `<p style="margin: 4px 0; color: #555;"><strong>Valutazione:</strong> ${stars} (${placeDetails.rating}/5 da ${placeDetails.user_ratings_total || 0} recensioni)</p>`;
+                        }
+
+                        if (placeDetails.opening_hours) {
+                          content += `<p style="margin: 4px 0; font-weight: bold; color: #333;">Orari:</p>`;
+                          content += `<ul style="list-style-type: none; padding-left: 0; margin: 4px 0; color: #555;">`;
+                          placeDetails.opening_hours.weekday_text?.forEach((day) => {
+                            content += `<li style="font-size: 13px;">${day}</li>`;
+                          });
+                          content += `</ul>`;
+                          if (typeof placeDetails.opening_hours.isOpen === 'function') { 
+                              content += `<p style="margin: 4px 0; font-weight: bold; color: ${placeDetails.opening_hours.isOpen() ? 'green' : 'red'};">${placeDetails.opening_hours.isOpen() ? 'Aperto ora' : 'Chiuso ora'}</p>`;
+                          }
+                        }
+                        
+                        if (placeDetails.website) {
+                          content += `<p style="margin: 4px 0;"><a href="${placeDetails.website}" target="_blank" rel="noopener noreferrer" style="color: #1a73e8; text-decoration: none;">Sito Web</a></p>`;
+                        }
+
+                        let destination = '';
+                        if (placeDetails.geometry?.location) {
+                            destination = `${placeDetails.geometry.location.lat()},${placeDetails.geometry.location.lng()}`;
+                        } else if (placeDetails.formatted_address) {
+                            destination = encodeURIComponent(placeDetails.formatted_address);
+                        } else if (placeDetails.name) {
+                            destination = encodeURIComponent(placeDetails.name);
+                        }
+                        
+                        if (destination) {
+                            const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&destination_place_id=${placeDetails.place_id || ''}`;
+                            content += `<p style="margin-top: 10px;"><a href="${directionsUrl}" target="_blank" rel="noopener noreferrer" style="display: inline-block; padding: 8px 12px; background-color: #1a73e8; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">Ottieni Indicazioni</a></p>`;
+                        }
+
+                        content += `</div>`;
+                        infoWindow.setContent(content);
+                      } else {
+                        console.error('Place details error:', detailStatus, 'for place:', place.name, 'ID:', place.place_id);
+                        let detailErrorMessage = `Dettagli non disponibili per "${place.name || 'questo luogo'}".`;
+                        if (detailStatus === gMaps.places.PlacesServiceStatus.UNKNOWN_ERROR) {
+                          detailErrorMessage += ` (Errore Sconosciuto). Potrebbe essere un problema temporaneo o con la configurazione della chiave API. Controlla la console del browser per maggiori dettagli.`;
+                        } else if (detailStatus === gMaps.places.PlacesServiceStatus.OVER_QUERY_LIMIT) {
+                          detailErrorMessage += ` (Limite Richieste Superato). Hai superato il limite di richieste consentite.`;
+                        } else if (detailStatus === gMaps.places.PlacesServiceStatus.NOT_FOUND) {
+                          detailErrorMessage += ` (Non Trovato). Il luogo specificato non è stato trovato.`;
+                        } else if (detailStatus === gMaps.places.PlacesServiceStatus.INVALID_REQUEST) {
+                          detailErrorMessage += ` (Richiesta Non Valida). La richiesta per i dettagli non era valida.`;
+                        } else {
+                          detailErrorMessage += ` (Errore: ${detailStatus}).`;
+                        }
+                        infoWindow.setContent(`<div><strong>${place.name || 'Nome non disponibile'}</strong><br>${detailErrorMessage}</div>`);
+                      }
+                      infoWindow.open({anchor: marker, map}); 
+                    });
+                  });
+                  newMarkersFound.push(marker);
+                  if (place.geometry.location) { 
+                      bounds.extend(place.geometry.location);
+                  }
+                }
+              });
+              setMarkers(newMarkersFound);
+
+              if (newMarkersFound.length > 0 && map) {
+                  map.fitBounds(bounds);
+                  const currentZoom = map.getZoom();
+                  if (typeof currentZoom === 'number') {
+                      if (newMarkersFound.length === 1 && currentZoom > (MAP_DEFAULT_ZOOM + 2)) {
+                          map.setZoom(MAP_DEFAULT_ZOOM + 2);
+                      } else if (currentZoom < MAP_DEFAULT_ZOOM -2 && newMarkersFound.length > 1) { 
+                          map.setZoom(MAP_DEFAULT_ZOOM-2);
+                      }
+                  }
+              } else if (map) {
+                  setPlacesError(`Nessuna ${searchQuery} trovata con dettagli validi nelle vicinanze.`);
+                  map.setCenter(userLocation);
+                  map.setZoom(MAP_DEFAULT_ZOOM);
+              }
+              
+            } else if (status === gPlacesStatus.ZERO_RESULTS && map) {
+              setPlacesError(`Nessuna ${searchQuery} trovata entro ${MAP_SEARCH_RADIUS / 1000}km.`);
+              map.setCenter(userLocation); 
+              map.setZoom(MAP_DEFAULT_ZOOM);
+            } else if (map) {
+              console.error('PlacesService error:', status);
+              setPlacesError(`Errore nel cercare ${searchQuery}: ${status}. Riprova più tardi.`);
+              map.setCenter(userLocation); 
+              map.setZoom(MAP_DEFAULT_ZOOM);
+            }
+          });
+        }, [map, searchQuery, userLocation, infoWindow, googleMapsReady]);
+
+        if (!googleMapsReady) {
+          return (
+            React.createElement('div', { className: "flex flex-col items-center justify-center h-full" },
+              React.createElement(LoadingSpinner, { size: "h-12 w-12" }),
+              React.createElement('p', { className: "mt-4 text-gray-600" }, "Caricamento mappa...")
+            )
+          );
+        }
+
+        return (
+          React.createElement('div', { className: "w-full h-full relative" },
+            React.createElement('div', { ref: mapRef, className: "w-full h-full rounded-lg" }),
+            (isLoadingPlaces || isLoadingDetails) && (
+              React.createElement('div', { className: "absolute top-2 left-1/2 -translate-x-1/2 bg-white bg-opacity-90 p-2 rounded shadow-lg z-10 flex items-center" },
+                React.createElement(LoadingSpinner, { size: "h-5 w-5" }),
+                React.createElement('span', { className: "ml-2 text-gray-700 text-sm" },
+                  isLoadingDetails ? 'Caricamento dettagli...' : `Ricerca ${searchQuery}...`
+                )
+              )
+            ),
+            placesError && !isLoadingPlaces && (
+              React.createElement('div', { className: "absolute top-2 left-1/2 -translate-x-1/2 p-2 bg-red-100 text-red-700 text-sm text-center z-10 rounded shadow-lg max-w-[90%]" },
+                placesError
+              )
+            )
+          )
+        );
+      };
+      // --- END OF INLINED MapDisplay.tsx ---
+
+      // --- START OF INLINED App.tsx ---
+      const App = () => {
+        const [messages, setMessages] = useState([]);
+        const [isLoading, setIsLoading] = useState(false);
+        const [isProcessingMapRelated, setIsProcessingMapRelated] = useState(false);
+        const [error, setError] = useState(null);
+        const chatContainerRef = useRef(null);
+        const [apiKeyError, setApiKeyError] = useState(null);
+
+        const [lastQuoteContext, setLastQuoteContext] = useState(null);
+        const [currentQuoteIdForPdfOrFeedback, setCurrentQuoteIdForPdfOrFeedback] = useState(null);
+
+        const [awaitingFeedback, setAwaitingFeedback] = useState(false);
+        
+        const [quoteHistory, setQuoteHistory] = useState([]);
+        const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+
+        const [showMapModal, setShowMapModal] = useState(false);
+        const [userLocation, setUserLocation] = useState(null);
+        const [mapError, setMapError] = useState(null);
+        const [googleMapsScriptLoaded, setGoogleMapsScriptLoaded] = useState(false);
+
+        useEffect(() => {
+          const initErrorMsg = initializeChat();
+          if (initErrorMsg) {
+            if(initErrorMsg === MISSING_API_KEY_ERROR){
+              setApiKeyError(initErrorMsg);
+            } else {
+              setError(initErrorMsg); 
+            }
+             setMessages([
+              {
+                id: 'init-error',
+                sender: 'ai',
+                text: initErrorMsg,
+                timestamp: new Date(),
+              },
+            ]);
+          } else {
+            const initialMessages = [];
+            
+            initialMessages.push({
+              id: 'init-disclaimer',
+              sender: 'ai',
+              text: INITIAL_DISCLAIMER_MESSAGE,
+              timestamp: new Date(),
+              isDisclaimer: true,
+            });
+
+            const initialAiMessageText = `Ciao! Sono ${AI_NAME} :) Ecco come posso aiutarti:
+*   🖼️ \`Analizzare le tue immagini per stimare i danni.\`
+*   📄 \`Generare una bozza di preventivo per la riparazione del tuo veicolo.\`
+*   🗺️ \`Mostrarti le carrozzerie più vicine sulla mappa (basta chiedere).\`
+*   💡 \`Fornirti il preventivo in formato pdf tramite download.\`
+Come posso aiutarti?`;
+
+            initialMessages.push({
+              id: 'init-ai-welcome',
+              sender: 'ai',
+              text: initialAiMessageText,
+              timestamp: new Date(),
+            });
+
+            setMessages(initialMessages);
+          }
+          const storedHistory = localStorage.getItem(LOCAL_STORAGE_HISTORY_KEY);
+          if (storedHistory) {
+            try {
+              setQuoteHistory(JSON.parse(storedHistory));
+            } catch (e) {
+              console.error("Failed to parse quote history from localStorage", e);
+              localStorage.removeItem(LOCAL_STORAGE_HISTORY_KEY);
+            }
+          }
+        }, []);
+
+        useEffect(() => {
+          if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+          }
+        }, [messages]);
+
+        useEffect(() => {
+          localStorage.setItem(LOCAL_STORAGE_HISTORY_KEY, JSON.stringify(quoteHistory));
+        }, [quoteHistory]);
+
+        const addAiMessage = (text, idSuffix = '', mapTriggered = false) => {
+          const newAiMessage = {
+            id: `ai-${Date.now().toString()}${idSuffix}`,
+            sender: 'ai',
+            text: text,
+            timestamp: new Date(),
+            mapTriggered,
+          };
+          setMessages((prevMessages) => [...prevMessages, newAiMessage]);
+          return newAiMessage;
+        };
+
+        const saveQuoteToHistory = ( 
+          quoteId,
+          userQueryText,
+          userImageUrls,
+          aiQuoteText, 
+          pdfGenerated,
+          feedback
+        ) => {
+          const historyItem = { 
+            id: quoteId,
+            timestamp: new Date(), 
+            userQueryText,
+            userImageUrls,
+            aiQuoteText, 
+            pdfGenerated,
+            feedback
+          };
+          setQuoteHistory(prev => { 
+              const existingIndex = prev.findIndex(item => item.id === quoteId);
+              if (existingIndex > -1) {
+                  const updatedHistory = [...prev];
+                  updatedHistory[existingIndex] = {...updatedHistory[existingIndex], ...historyItem}; 
+                  return updatedHistory;
+              }
+              return [...prev, historyItem];
+          });
+        };
+        
+        const updateQuoteHistoryItem = (quoteId, updates) => { 
+          setQuoteHistory(prev => 
+            prev.map(item => item.id === quoteId ? { ...item, ...updates } : item)
+          );
+        };
+
+        const loadGoogleMapsScript = () => {
+          if (window.google && window.google.maps) {
+            setGoogleMapsScriptLoaded(true);
+            return Promise.resolve();
+          }
+          const existingScript = document.getElementById('google-maps-api-script');
+          if (existingScript && existingScript.getAttribute('data-loaded') === 'true') {
+              setGoogleMapsScriptLoaded(true);
+              return Promise.resolve();
+          }
+          if (existingScript && !(existingScript.getAttribute('data-loaded') === 'true')) {
+              return new Promise((resolve, reject) => {
+                  existingScript.addEventListener('load', () => { setGoogleMapsScriptLoaded(true); resolve(); });
+                  existingScript.addEventListener('error', (e) => { setMapError(GOOGLE_MAPS_LOAD_ERROR); reject(e); });
+              });
+          }
+
+          return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.id = 'google-maps-api-script';
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&loading=async`;
+            script.async = true;
+            script.defer = true;
+            script.onload = () => {
+              script.setAttribute('data-loaded', 'true');
+              setGoogleMapsScriptLoaded(true);
+              resolve();
+            };
+            script.onerror = (e) => {
+              console.error("Failed to load Google Maps script:", e);
+              setMapError(GOOGLE_MAPS_LOAD_ERROR);
+              setGoogleMapsScriptLoaded(false); 
+              reject(e);
+            };
+            document.head.appendChild(script);
+          });
+        };
+
+        const handleMapRequest = async (aiPreparatoryMessage) => {
+          addAiMessage(aiPreparatoryMessage, "-map-prep", true);
+          setIsProcessingMapRelated(true);
+          setMapError(null);
+          setUserLocation(null); 
+
+          try {
+              await loadGoogleMapsScript(); 
+              if (navigator.geolocation) {
+                  navigator.geolocation.getCurrentPosition(
+                      (position) => {
+                          setUserLocation({
+                              lat: position.coords.latitude,
+                              lng: position.coords.longitude,
+                          });
+                          setShowMapModal(true); 
+                          setIsProcessingMapRelated(false);
+                      },
+                      (geoError) => {
+                          let geoErrorMessage = "";
+                          switch (geoError.code) {
+                              case geoError.PERMISSION_DENIED: geoErrorMessage = GEOLOCATION_ERROR_PERMISSION_DENIED; break;
+                              case geoError.POSITION_UNAVAILABLE: geoErrorMessage = GEOLOCATION_ERROR_POSITION_UNAVAILABLE; break;
+                              case geoError.TIMEOUT: geoErrorMessage = GEOLOCATION_ERROR_TIMEOUT; break;
+                              default: geoErrorMessage = GEOLOCATION_ERROR_UNKNOWN;
+                          }
+                          setMapError(geoErrorMessage);
+                          addAiMessage(geoErrorMessage, "-map-geo-err");
+                          setShowMapModal(true); 
+                          setIsProcessingMapRelated(false);
+                      },
+                      { timeout: 10000 } 
+                  );
+              } else {
+                  const noGeoMsg = GEOLOCATION_UNSUPPORTED_BROWSER;
+                  setMapError(noGeoMsg);
+                  addAiMessage(noGeoMsg, "-map-no-geo");
+                  setShowMapModal(true); 
+                  setIsProcessingMapRelated(false);
+              }
+          } catch (scriptLoadError) {
+              addAiMessage(mapError || GOOGLE_MAPS_LOAD_ERROR, "-map-lib-err");
+              setShowMapModal(true); 
+              setIsProcessingMapRelated(false);
+          }
+        };
+
+
+        const handleSendMessage = async (text, imageFiles) => {
+          if (apiKeyError) {
+            addAiMessage(apiKeyError, '-apikey-err');
+            return;
+          }
+
+          const userSubmittedText = text?.trim() ?? '';
+          const userSubmittedTextLower = userSubmittedText.toLowerCase();
+          const currentMessageId = Date.now().toString();
+
+           const userMessage = {
+              id: currentMessageId,
+              sender: 'user',
+              text: userSubmittedText,
+              imageUrls: imageFiles?.map(f => f.dataUrl),
+              timestamp: new Date(),
+            };
+          setMessages((prevMessages) => [...prevMessages, userMessage]);
+          
+          if (showMapModal) {
+              setShowMapModal(false);
+              setUserLocation(null);
+              setMapError(null);
+          }
+
+          setIsLoading(true); 
+          setError(null);
+
+          if (awaitingFeedback && currentQuoteIdForPdfOrFeedback) {
+              setAwaitingFeedback(false);
+              let feedbackResponse = undefined;
+
+              if (FEEDBACK_YES_OPTIONS.some(r => userSubmittedTextLower.includes(r))) feedbackResponse = 'sì';
+              else if (FEEDBACK_NO_OPTIONS.some(r => userSubmittedTextLower.includes(r))) feedbackResponse = 'no';
+              else if (FEEDBACK_PARTIAL_OPTIONS.some(r => userSubmittedTextLower.includes(r))) feedbackResponse = 'parzialmente';
+              
+              if (feedbackResponse) {
+                  addAiMessage(FEEDBACK_THANKS_MESSAGE, "-feedback-thanks");
+                  updateQuoteHistoryItem(currentQuoteIdForPdfOrFeedback, { feedback: feedbackResponse }); 
+              } else {
+                  addAiMessage("Non ho compreso il tuo feedback, ma grazie comunque!", "-feedback-unknown");
+              }
+              setCurrentQuoteIdForPdfOrFeedback(null); 
+              setIsLoading(false); 
+              return;
+          }
+          
+          if (!userSubmittedText && (!imageFiles || imageFiles.length === 0)) {
+              setIsLoading(false); 
+              setMessages(prev => prev.filter(m => m.id !== currentMessageId || (m.text && m.text.trim() !== '') || (m.imageUrls && m.imageUrls.length > 0) ));
+              return;
+          }
+          
+          const aiLoadingMessageId = `ai-loading-${Date.now()}`;
+          setMessages((prevMessages) => [
+            ...prevMessages,
+            { id: aiLoadingMessageId, sender: 'ai', isLoading: true, timestamp: new Date() },
+          ]);
+
+          let aiResponse = null;
+
+          try {
+            aiResponse = await sendMessageToChat(userSubmittedText, imageFiles);
+            setMessages((prevMessages) => prevMessages.filter(msg => msg.id !== aiLoadingMessageId));
+            
+            if (!aiResponse || !aiResponse.text) { 
+                console.error("AI response or AI response text is undefined/null.");
+                addAiMessage(GENERAL_API_ERROR, "-response-error");
+                return; 
+            }
+            
+            let finalAiTextForDisplayAndLogic = aiResponse.text;
+            let isActualQuote = false; 
+            
+            if (aiResponse.text.startsWith(MAP_REQUEST_MARKER)) {
+                const aiPreparatoryMessage = aiResponse.text.substring(MAP_REQUEST_MARKER.length).trim();
+                setIsLoading(false); 
+                handleMapRequest(aiPreparatoryMessage); 
+                return; 
+            }
+            
+            if (aiResponse.text.startsWith("###QUOTE_START###")) {
+                finalAiTextForDisplayAndLogic = aiResponse.text.substring("###QUOTE_START###".length).trim();
+                isActualQuote = true;
+            }
+            
+            addAiMessage(finalAiTextForDisplayAndLogic || (isActualQuote ? "Ho riscontrato un problema nel formattare il preventivo." : "Nessuna risposta testuale ricevuta."), "-response");
+            
+            if (isActualQuote) {
+              if (!finalAiTextForDisplayAndLogic) {
+                  // Message already added above about format problem.
+              } else {
+                  const currentQuoteCtx = { 
+                    userMessageText: userSubmittedText,
+                    userImagesToIncludeInPdfDataUrls: imageFiles?.map(f => f.dataUrl),
+                    aiQuoteText: finalAiTextForDisplayAndLogic, 
+                    timestamp: new Date(userMessage.timestamp) 
+                  };
+                  setLastQuoteContext(currentQuoteCtx); 
+                  setCurrentQuoteIdForPdfOrFeedback(userMessage.id); 
+                  
+                  saveQuoteToHistory( 
+                      userMessage.id,
+                      userSubmittedText,
+                      imageFiles?.map(f => f.dataUrl),
+                      finalAiTextForDisplayAndLogic, 
+                      false 
+                  );
+
+                  addAiMessage("Sto generando il PDF del preventivo...", "-pdf-generating-msg");
+                  try {
+                    await generateQuotePdf(
+                      finalAiTextForDisplayAndLogic, 
+                      imageFiles?.map(f => f.dataUrl),
+                      new Date(userMessage.timestamp)
+                    );
+                    addAiMessage(PDF_GENERATION_CONFIRMATION, "-pdf-confirm-msg");
+                    updateQuoteHistoryItem(userMessage.id, { pdfGenerated: true });
+                  } catch (e) {
+                    console.error("PDF generation error:", e);
+                    let pdfErrorMsg = PDF_GENERATION_ERROR;
+                    if (e instanceof Error && e.message.startsWith("PDF construction failed:")) {
+                      pdfErrorMsg = `${PDF_GENERATION_ERROR} Dettagli: ${e.message.substring("PDF construction failed:".length).trim()}`;
+                    }
+                    addAiMessage(pdfErrorMsg, "-pdf-err-msg");
+                    updateQuoteHistoryItem(userMessage.id, { pdfGenerated: false });
+                  }
+                  
+                  setAwaitingFeedback(true);
+                  setTimeout(() => addAiMessage(FEEDBACK_PROMPT, "-feedback-prompt"), 300); 
+              }
+            }
+          } catch (e) {
+            const errorMessage = e instanceof Error ? e.message : GENERAL_API_ERROR;
+            setError(errorMessage);
+            setMessages((prevMessages) =>
+              prevMessages.filter(msg => msg.id !== aiLoadingMessageId)
+                .concat({
+                  id: Date.now().toString() + '-error',
+                  sender: 'ai',
+                  text: `Errore: ${errorMessage}`,
+                  timestamp: new Date(),
+                })
+            );
+          } finally {
+            setIsLoading(false);
+          }
+        };
+
+        const handleClearHistory = () => {
+          setQuoteHistory([]); 
+        };
+
+        const handleDeleteHistoryItem = (id) => {
+          setQuoteHistory(prev => prev.filter(item => item.id !== id)); 
+        };
+
+        const closeMapModal = () => {
+          setShowMapModal(false);
+          setUserLocation(null);
+          setMapError(null);
+        };
+
+        const overallLoading = isLoading || isProcessingMapRelated;
+
+        return (
+          React.createElement('div', { className: "flex flex-col h-screen max-w-3xl mx-auto bg-white shadow-xl relative" },
+            React.createElement('header', { className: "bg-primary-600 text-white p-4 flex items-center justify-between space-x-3" },
+              React.createElement('div', { className: "flex items-center space-x-3" },
+                  React.createElement(SparklesIcon, { className: "h-8 w-8" }),
+                  React.createElement('h1', { className: "text-xl font-semibold" }, AI_NAME)
+              ),
+              React.createElement('button', {
+                  onClick: () => setShowHistoryPanel(true),
+                  className: "p-2 hover:bg-primary-700 rounded-full",
+                  'aria-label': "Mostra cronologia preventivi",
+                  title: "Cronologia Preventivi"
+              }, React.createElement(ClockIcon, { className: "h-6 w-6" }))
+            ),
+            apiKeyError && (
+               React.createElement('div', { className: "p-4 bg-red-100 text-red-700 text-center" },
+                 React.createElement('strong', null, "Errore di Configurazione: "), `${apiKeyError} Imposta la variabile d'ambiente API_KEY.`
+               )
+            ),
+            React.createElement('div', { ref: chatContainerRef, className: "flex-grow p-4 space-y-4 overflow-y-auto bg-gray-50" },
+              messages.map((msg) => (
+                React.createElement(ChatMessage, { key: msg.id, message: msg })
+              ))
+            ),
+            error && !apiKeyError && (
+              React.createElement('div', { className: "p-2 bg-red-100 text-red-700 text-sm text-center" },
+                error
+              )
+            ),
+            React.createElement(ChatInput, { onSendMessage: handleSendMessage, isLoading: overallLoading || !!apiKeyError }),
+            showHistoryPanel && (
+              React.createElement(QuoteHistoryPanel, {
+                history: quoteHistory,
+                onClose: () => setShowHistoryPanel(false),
+                onClearHistory: handleClearHistory,
+                onDeleteItem: handleDeleteHistoryItem
+              })
+            ),
+            showMapModal && (
+              React.createElement('div', {
+                  className: "fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4",
+                  'aria-modal': "true",
+                  role: "dialog",
+                  'aria-labelledby': "map-modal-title"
+              },
+                  React.createElement('div', { className: "bg-white rounded-lg shadow-xl w-full max-w-2xl h-[80vh] md:h-[calc(100vh-8rem)] flex flex-col" },
+                      React.createElement('div', { className: "p-3 border-b flex justify-between items-center bg-gray-50 rounded-t-lg" },
+                          React.createElement('h2', { id: "map-modal-title", className: "text-lg font-semibold text-gray-800" }, "Carrozzerie Vicine"),
+                          React.createElement('button', {
+                              onClick: closeMapModal,
+                              className: "text-gray-500 hover:text-gray-800 p-1 rounded-full hover:bg-gray-200",
+                              'aria-label': "Chiudi mappa"
+                          }, React.createElement(XMarkIcon, { className: "h-6 w-6" }))
+                      ),
+                      React.createElement('div', { className: "flex-grow p-1 md:p-2 relative" },
+                          isProcessingMapRelated && !userLocation && !mapError && (
+                              React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center bg-white bg-opacity-80 z-10" },
+                                  React.createElement(LoadingSpinner, { size: "h-10 w-10" }),
+                                  React.createElement('p', { className: "mt-3 text-gray-600" }, "Recupero posizione e caricamento mappa...")
+                              )
+                          ),
+                          mapError && !userLocation && ( 
+                               React.createElement('div', { className: "flex flex-col items-center justify-center h-full text-center px-4" },
+                                  React.createElement(SparklesIcon, { className: "h-12 w-12 text-primary-400 mb-3" }),
+                                  React.createElement('p', { className: "text-red-600 font-semibold" }, "Errore Mappa"),
+                                  React.createElement('p', { className: "text-gray-700 mt-1" }, mapError),
+                                  React.createElement('button', {
+                                      onClick: closeMapModal,
+                                      className: "mt-4 bg-primary-500 text-white px-4 py-2 rounded hover:bg-primary-600"
+                                  }, "Chiudi")
+                              )
+                          ),
+                          userLocation && googleMapsScriptLoaded && (
+                              React.createElement(MapDisplay, {
+                                  apiKey: GOOGLE_MAPS_API_KEY,
+                                  userLocation: userLocation,
+                                  searchQuery: "carrozzeria",
+                                  onClose: closeMapModal,
+                                  googleMapsReady: googleMapsScriptLoaded
+                              })
+                          ),
+                           !googleMapsScriptLoaded && !mapError && isProcessingMapRelated && (
+                               React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center bg-white bg-opacity-80 z-10" },
+                                  React.createElement(LoadingSpinner, { size: "h-10 w-10" }),
+                                  React.createElement('p', { className: "mt-3 text-gray-600" }, "Caricamento libreria mappa...")
+                              )
+                          )
+                      )
+                  )
+              )
+            )
+          )
+        );
+      };
+      // --- END OF INLINED App.tsx ---
+
+      // --- START OF INLINED INDEX.TSX (entry point) ---
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        React.createElement(React.StrictMode, null, React.createElement(App))
+      );
+      // --- END OF INLINED INDEX.TSX ---
+    </script>
+  </body>
+</html>
